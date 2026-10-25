@@ -1,0 +1,392 @@
+import os
+import json
+import threading
+import urllib.request
+import urllib.error
+
+from kivy.app import App
+from kivy.lang import Builder
+from kivy.clock import Clock
+from kivy.metrics import dp
+from kivy.properties import StringProperty
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.label import Label
+from kivy.uix.popup import Popup
+from kivy.uix.textinput import TextInput
+from kivy.uix.button import Button
+from kivy.graphics import Color, RoundedRectangle
+
+
+APP_NAME = "AB AI"
+BRAND = "MAI DIWANI TECH"
+MODEL = "gemini-3.8-flash"
+
+
+KV = """
+<ABRoot>:
+    orientation: "vertical"
+    padding: dp(12)
+    spacing: dp(8)
+
+    canvas.before:
+        Color:
+            rgba: 0.035, 0.045, 0.09, 1
+        Rectangle:
+            pos: self.pos
+            size: self.size
+
+    BoxLayout:
+        size_hint_y: None
+        height: dp(65)
+        spacing: dp(8)
+
+        Label:
+            text: "[b]AB AI[/b]\\n[size=13]MAI DIWANI TECH[/size]"
+            markup: True
+            font_size: "23sp"
+            color: 0.35, 0.72, 1, 1
+            halign: "left"
+            valign: "middle"
+            text_size: self.size
+
+        Button:
+            text: "⚙"
+            size_hint_x: None
+            width: dp(52)
+            background_normal: ""
+            background_color: 0.12, 0.22, 0.40, 1
+            on_release: app.open_settings()
+
+    Label:
+        text: "Your AI Assistant"
+        size_hint_y: None
+        height: dp(25)
+        color: 0.55, 0.78, 1, 1
+        font_size: "13sp"
+
+    ScrollView:
+        id: scroll
+        do_scroll_x: False
+        bar_width: dp(4)
+
+        GridLayout:
+            id: messages
+            cols: 1
+            spacing: dp(10)
+            padding: dp(3)
+            size_hint_y: None
+            height: self.minimum_height
+
+    Label:
+        id: status
+        text: root.status_text
+        size_hint_y: None
+        height: dp(24)
+        font_size: "12sp"
+        color: 0.50, 0.85, 0.65
+
+    BoxLayout:
+        size_hint_y: None
+        height: dp(55)
+        spacing: dp(7)
+
+        TextInput:
+            id: message
+            hint_text: "Rubuta saƙonka..."
+            multiline: False
+            font_size: "16sp"
+            padding: dp(12), dp(15)
+            background_color: 0.12, 0.15, 0.23, 1
+            foreground_color: 1, 1, 1, 1
+            cursor_color: 0.35, 0.72, 1, 1
+            on_text_validate: app.send_message()
+
+        Button:
+            text: "SEND"
+            size_hint_x: None
+            width: dp(85)
+            background_normal: ""
+            background_color: 0.12, 0.42, 0.85, 1
+            on_release: app.send_message()
+"""
+
+
+class ABRoot(BoxLayout):
+    status_text = StringProperty("AB AI is ready")
+
+
+class ABAIApp(App):
+
+    def build(self):
+        self.title = APP_NAME + " - " + BRAND
+        self.root = Builder.load_string(KV)
+        self.history = []
+
+        Clock.schedule_once(
+            lambda dt: self.add_message(
+                "AB AI",
+                "Assalamu alaikum! Barka da zuwa AB AI. "
+                "Ni ne mataimakinka na MAI DIWANI TECH. "
+                "Ka saka Gemini API key a Settings domin fara hira."
+            ),
+            0.5
+        )
+
+        return self.root
+
+    def config_file(self):
+        return os.path.join(
+            self.user_data_dir,
+            "ab_ai_config.json"
+        )
+
+    def get_api_key(self):
+        try:
+            with open(self.config_file(), "r", encoding="utf-8") as f:
+                return json.load(f).get("api_key", "").strip()
+        except (OSError, ValueError):
+            return ""
+
+    def save_api_key(self, key):
+        os.makedirs(self.user_data_dir, exist_ok=True)
+
+        with open(self.config_file(), "w", encoding="utf-8") as f:
+            json.dump({"api_key": key.strip()}, f)
+
+    def open_settings(self):
+        box = BoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=dp(12)
+        )
+
+        box.add_widget(Label(
+            text="Saka Gemini API key ɗinka. "
+                 "Kada ka tura key ɗinka ga kowa.",
+            size_hint_y=None,
+            height=dp(55)
+        ))
+
+        key_input = TextInput(
+            text=self.get_api_key(),
+            hint_text="Gemini API key",
+            password=True,
+            multiline=False,
+            size_hint_y=None,
+            height=dp(48)
+        )
+
+        box.add_widget(key_input)
+
+        buttons = BoxLayout(
+            size_hint_y=None,
+            height=dp(45),
+            spacing=dp(8)
+        )
+
+        popup = Popup(
+            title="AB AI Settings",
+            content=box,
+            size_hint=(0.92, 0.42)
+        )
+
+        save_button = Button(text="SAVE")
+        cancel_button = Button(text="CANCEL")
+
+        buttons.add_widget(save_button)
+        buttons.add_widget(cancel_button)
+        box.add_widget(buttons)
+
+        def save_key(instance):
+            key = key_input.text.strip()
+
+            if not key:
+                self.root.status_text = "Ka saka API key."
+                return
+
+            self.save_api_key(key)
+            self.root.status_text = "API key saved."
+            popup.dismiss()
+
+        save_button.bind(on_release=save_key)
+        cancel_button.bind(on_release=lambda instance: popup.dismiss())
+
+        popup.open()
+
+    def add_message(self, speaker, message):
+        bubble = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            padding=(dp(12), dp(10))
+        )
+
+        title = Label(
+            text=speaker,
+            size_hint_y=None,
+            height=dp(25),
+            halign="left",
+            valign="middle",
+            color=(0.40, 0.75, 1, 1),
+            bold=True
+        )
+        title.bind(size=lambda w, s: setattr(w, "text_size", s))
+
+        body = Label(
+            text=message,
+            size_hint_y=None,
+            halign="left",
+            valign="middle",
+            color=(1, 1, 1, 1)
+        )
+
+        body.bind(
+            width=lambda w, width: setattr(
+                w, "text_size", (width, None)
+            )
+        )
+        body.bind(
+            texture_size=lambda w, size: setattr(
+                w, "height", size[1] + dp(5)
+            )
+        )
+
+        bubble.add_widget(title)
+        bubble.add_widget(body)
+
+        with bubble.canvas.before:
+            Color(
+                0.10, 0.19, 0.32, 1
+                if speaker == "AB AI"
+                else 0.12
+            )
+            bubble.background = RoundedRectangle(
+                pos=bubble.pos,
+                size=bubble.size,
+                radius=[dp(12)]
+            )
+
+        bubble.bind(
+            pos=lambda w, p: setattr(w.background, "pos", p),
+            size=lambda w, s: setattr(w.background, "size", s)
+        )
+
+        bubble.bind(
+            minimum_height=lambda w, h: setattr(w, "height", h)
+        )
+
+        self.root.ids.messages.add_widget(bubble)
+
+        Clock.schedule_once(
+            lambda dt: setattr(self.root.ids.scroll, "scroll_y", 0),
+            0.2
+        )
+
+    def send_message(self):
+        field = self.root.ids.message
+        message = field.text.strip()
+
+        if not message:
+            return
+
+        field.text = ""
+
+        self.add_message("YOU", message)
+
+        api_key = self.get_api_key()
+
+        if not api_key:
+            self.add_message(
+                "AB AI",
+                "Da fatan ka danna ⚙ ka saka Gemini API key."
+            )
+            return
+
+        self.history.append({
+            "role": "user",
+            "parts": [{"text": message}]
+        })
+
+        self.root.status_text = "AB AI yana tunani..."
+
+        threading.Thread(
+            target=self.ask_ai,
+            args=(api_key,),
+            daemon=True
+        ).start()
+
+    def ask_ai(self, api_key):
+        url = (
+            "https://generativelanguage.googleapis.com/"
+            f"v1beta/models/{MODEL}:generateContent"
+            f"?key={api_key}"
+        )
+
+        payload = {
+            "contents": self.history[-20:],
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 1500
+            }
+        }
+
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+
+        try:
+            with urllib.request.urlopen(
+                request, timeout=60
+            ) as response:
+                result = json.loads(
+                    response.read().decode("utf-8")
+                )
+
+            candidates = result.get("candidates", [])
+            parts = (
+                candidates[0]
+                .get("content", {})
+                .get("parts", [])
+                if candidates else []
+            )
+
+            answer = "\n".join(
+                p.get("text", "")
+                for p in parts
+                if p.get("text")
+            )
+
+            if not answer:
+                answer = (
+                    "Ban sami amsa ba. "
+                    "Ka duba API key da model ɗin."
+                )
+
+            self.history.append({
+                "role": "model",
+                "parts": [{"text": answer}]
+            })
+
+        except urllib.error.HTTPError as error:
+            answer = (
+                f"API Error: {error.code}. "
+                "Duba API key ko samuwar model ɗin."
+            )
+
+        except Exception as error:
+            answer = f"Matsalar haɗi: {error}"
+
+        Clock.schedule_once(
+            lambda dt: self.show_answer(answer),
+            0
+        )
+
+    def show_answer(self, answer):
+        self.add_message("AB AI", answer)
+        self.root.status_text = "AB AI is ready"
+
+
+if __name__ == "__main__":
+    ABAIApp().run()
